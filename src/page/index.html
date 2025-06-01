@@ -26,15 +26,29 @@
             font-size: 16px;
             border: none;
             border-radius: 5px;
-            background: #0078d4;
             color: #fff;
             cursor: pointer;
             transition: background 0.2s;
             text-decoration: none;
             text-align: center;
         }
-        button:hover, a.button:hover {
-            background: #005fa3;
+        button.start {
+            background: #28a745;
+        }
+        button.start:hover {
+            background: #1e7e34;
+        }
+        button.stop {
+            background: #dc3545;
+        }
+        button.stop:hover {
+            background: #a71d2a;
+        }
+        button.restart {
+            background: #fd7e14;
+        }
+        button.restart:hover {
+            background: #c05600;
         }
         .row {
             display: flex;
@@ -46,9 +60,9 @@
     <h1>MC Manager Dashboard</h1>
     <div class="dashboard">
         <div class="row">
-            <button onclick="sendAction('/start')">Start</button>
-            <button onclick="sendAction('/stop')">Stop</button>
-            <button onclick="sendAction('/restart')">Restart</button>
+            <button class="start" onclick="sendAction('/start')">Start</button>
+            <button class="stop" onclick="sendAction('/stop')">Stop</button>
+            <button class="restart" onclick="sendAction('/restart')">Restart</button>
         </div>
         <a class="button" href="/mods.zip" download>Download Extra Mods</a>
     </div>
