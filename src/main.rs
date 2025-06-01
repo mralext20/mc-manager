@@ -201,9 +201,9 @@ async fn update_extras() -> Status {
 
 #[get("/log_tail")]
 async fn log_tail() -> Option<String> {
-    // Use journalctl to get the last 1000 lines for the atm10.service (user scope)
+    // Use journalctl to get the last 1000 lines for the atm10.service (user scope), clean output
     let output = Command::new("journalctl")
-        .args(["--user", "-u", "atm10.service", "-n", "1000", "--no-pager"])
+        .args(["--user", "-u", "atm10.service", "-n", "1000", "--no-pager", "--output=cat"])
         .output()
         .ok()?;
     if output.status.success() {
