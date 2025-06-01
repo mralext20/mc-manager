@@ -332,6 +332,12 @@ async fn update_pack() -> Json<serde_json::Value> {
     let latest_file = api_json["data"].as_array()
         .and_then(|arr| arr.iter().find(|file| file["hasServerPack"].as_bool() == Some(true)));
     let file_id = latest_file.and_then(|file| file["id"].as_i64()).unwrap_or(0);
+    let display_name = latest_file.and_then(|file| file["displayName"].as_str()).unwrap_or("");
+    let version_re = Regex::new(r#"([\d.]+)"#).unwrap();
+    let latest_version = version_re.captures(display_name)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     if file_id == 0 {
         return Json(json!({"error": "Could not find latest server pack file id"}));
     }
@@ -404,6 +410,21 @@ async fn update_pack() -> Json<serde_json::Value> {
         .status();
     if !matches!(start_status, Ok(s) if s.success()) {
         return Json(json!({"error": "Failed to start server"}));
+    }
+
+    // 11. Update motd in server.properties to the current version
+    let server_properties_path = Path::new(&server_location).join("server.properties");
+    if server_properties_path.exists() {
+        if let Ok(contents) = fs::read_to_string(&server_properties_path).await {
+            let motd_re = Regex::new(r"(?m)^motd=.*$").unwrap();
+            let new_motd = format!("motd=ATM10 Server - v{}", latest_version);
+            let new_contents = if motd_re.is_match(&contents) {
+                motd_re.replace(&contents, new_motd.as_str()).to_string()
+            } else {
+                format!("{}\n{}", contents.trim_end(), new_motd)
+            };
+            let _ = fs::write(&server_properties_path, new_contents).await;
+        }
     }
 
     Json(json!({"status": "Pack updated. Please verify your world and settings!"}))
