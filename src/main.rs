@@ -1,10 +1,12 @@
 #[macro_use] extern crate rocket;
 #[macro_use] extern crate rocket_include_static_resources;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use std::io::Write;
 use rocket::tokio::fs::{self, File};
 use rocket::tokio::io::AsyncReadExt;
+use rocket::Config;
 use zip::write::{FileOptions, ZipWriter, ExtendedFileOptions};
 
 static_response_handler! {
@@ -74,9 +76,12 @@ async fn download_mods() -> Option<(rocket::http::ContentType, Vec<u8>)> {
 
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
+    let mut config = Config::release_default();
+    config.address = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
     rocket::build()
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
         ))
         .mount("/", routes![index_html, start, stop, restart, download_mods])
+        .configure(config)
 }
