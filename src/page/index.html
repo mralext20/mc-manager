@@ -28,27 +28,21 @@
             border-radius: 5px;
             color: #fff;
             cursor: pointer;
-            transition: background 0.2s;
+            transition: filter 0.2s;
             text-decoration: none;
             text-align: center;
         }
         button.start {
             background: #28a745;
         }
-        button.start:hover {
-            background: #1e7e34;
-        }
         button.stop {
             background: #dc3545;
         }
-        button.stop:hover {
-            background: #a71d2a;
-        }
         button.restart {
-            background: #fd7e14;
+            background: #c05600; 
         }
-        button.restart:hover {
-            background: #c05600;
+        button:hover, a.button:hover {
+            filter: brightness(0.85);
         }
         .row {
             display: flex;
