@@ -1038,6 +1038,7 @@ dependencies = [
  "async-std",
  "rocket",
  "rocket-include-static-resources",
+ "serde",
  "serde_json",
  "tokio",
  "zip",

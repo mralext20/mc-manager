@@ -3,7 +3,6 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
-use std::io::Write;
 use rocket::tokio::fs::{self, File};
 use rocket::tokio::io::AsyncReadExt;
 use rocket::Config;
@@ -11,7 +10,10 @@ use zip::write::{FileOptions, ZipWriter, ExtendedFileOptions};
 use rocket::response::content::RawJson;
 use rocket::tokio::fs::remove_file;
 use rocket::http::Status;
-extern crate serde_json;
+use std::path::Path;
+use std::env;
+use serde::Deserialize;
+use std::io::Write; // Needed for ZipWriter::write_all
 
 
 
@@ -121,6 +123,82 @@ async fn extra_mods_upload(mut data: rocket::fs::TempFile<'_>) -> Result<Status,
     Ok(Status::Ok)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ModEntry {
+    pub file: String,
+    // Add other fields if needed
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Modlist {
+    pub mods: Vec<ModEntry>,
+}
+
+#[post("/update_extras")]
+async fn update_extras() -> Status {
+    // 1. Stop the server
+    let stop_status = Command::new("systemctl")
+        .args(["--user", "stop", "atm10.service"])
+        .status();
+    if !matches!(stop_status, Ok(s) if s.success()) {
+        return Status::InternalServerError;
+    }
+
+    // 2. Determine server location
+    let server_location = env::var("SERVER_LOCATION").unwrap_or_else(|_| "atm10".to_string());
+    let mods_dir = Path::new(&server_location).join("mods");
+    let extra_mods_dir = env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| "extra_mods".to_string());
+
+    // 3. Read modlist.json from config/crash_assistant/modlist.json
+    let modlist_path = Path::new("config/crash_assistant/modlist.json");
+    let modlist: Option<Modlist> = match fs::read_to_string(&modlist_path).await {
+        Ok(contents) => serde_json::from_str(&contents).ok(),
+        Err(_) => None,
+    };
+    let allowed_mods: Vec<String> = match &modlist {
+        Some(list) => list.mods.iter().map(|m| m.file.clone()).collect(),
+        None => Vec::new(),
+    };
+
+    // 4. Delete .jar files in mods/ that are not in modlist
+    if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".jar") && !allowed_mods.contains(&name.to_string()) {
+                        let _ = fs::remove_file(&path).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Copy all .jar files from extra_mods to mods
+    if let Ok(mut entries) = fs::read_dir(&extra_mods_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".jar") {
+                        let dest = mods_dir.join(name);
+                        let _ = fs::copy(&path, &dest).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // 6. Start the server
+    let start_status = Command::new("systemctl")
+        .args(["--user", "start", "atm10.service"])
+        .status();
+    if !matches!(start_status, Ok(s) if s.success()) {
+        return Status::InternalServerError;
+    }
+    Status::Ok
+}
+
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
     let mut config = Config::release_default();
@@ -129,6 +207,6 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
         ))
-        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload])
+        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras])
         .configure(config)
 }
