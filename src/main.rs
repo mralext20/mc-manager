@@ -14,11 +14,16 @@ use std::path::Path;
 use std::env;
 use serde::Deserialize;
 use std::io::Write; // Needed for ZipWriter::write_all
+use rocket::serde::json::{Json, json};
+use regex::Regex;
+use reqwest;
+use rocket::data::ByteUnit;
 
 
 
 static_response_handler! {
     "/" => index_html => "index-html",
+    "/static/style.css" => style_css => "style-css",
 }
 
 #[post("/start")]
@@ -213,14 +218,209 @@ async fn log_tail() -> Option<String> {
     }
 }
 
+#[get("/check_pack_update")]
+async fn check_pack_update() -> Json<serde_json::Value> {
+    // 1. Read the local modpack version from $SERVER/config/bcc-common.toml
+    let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| "atm10".to_string());
+    let config_path = Path::new(&server_location).join("config/bcc-common.toml");
+    let mut file = match File::open(&config_path).await {
+        Ok(f) => f,
+        Err(_) => return Json(json!({"error": "Could not open bcc-common.toml"})),
+    };
+    let mut contents = String::new();
+    if file.read_to_string(&mut contents).await.is_err() {
+        return Json(json!({"error": "Could not read bcc-common.toml"}));
+    }
+    let re = Regex::new(r#"modpackVersion\s*=\s*"([^"]+)""#).unwrap();
+    let local_version = re.captures(&contents).and_then(|cap| cap.get(1)).map(|m| m.as_str().to_string());
+    if local_version.is_none() {
+        return Json(json!({"error": "Could not find modpackVersion in bcc-common.toml"}));
+    }
+    let local_version = local_version.unwrap();
+
+    // 2. Fetch the latest modpack version from CurseForge API (files endpoint)
+    let api_url = "https://www.curseforge.com/api/v1/mods/925200/files/";
+    let client = reqwest::Client::new();
+    let resp = match client.get(api_url)
+        .header("User-Agent", "mc-manager/1.0 (https://github.com/xela/mc-manager)")
+        .send().await {
+        Ok(r) => r,
+        Err(_) => return Json(json!({"error": "Failed to fetch CurseForge API"})),
+    };
+    let api_json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return Json(json!({"error": "Failed to parse CurseForge API response"})),
+    };
+    // Find the latest file with hasServerPack=true
+    let latest_file = api_json["data"].as_array()
+        .and_then(|arr| arr.iter().find(|file| file["hasServerPack"].as_bool() == Some(true)));
+    let display_name = latest_file.and_then(|file| file["displayName"].as_str()).unwrap_or("");
+    let version_re = Regex::new(r#"([\d.]+)"#).unwrap();
+    let latest_version = version_re.captures(display_name)
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Json(json!({
+        "local_version": local_version,
+        "latest_version": latest_version,
+        "up_to_date": local_version == latest_version
+    }))
+}
+
+#[post("/update_pack")]
+async fn update_pack() -> Json<serde_json::Value> {
+    use rocket::tokio::fs;
+    use rocket::tokio::io::AsyncWriteExt;
+    use std::fs::Permissions;
+    use std::os::unix::fs::PermissionsExt;
+
+    // 1. Warn user (frontend should show a warning, backend just logs)
+    println!("WARNING: Running update_pack. User may lose data if not careful!");
+
+    // 2. Define paths
+    let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| "atm10".to_string());
+    let backup_dir = format!("{}_backup", server_location);
+    let files_to_backup = [
+        "eula.txt",
+        "ops.json",
+        "server.properties",
+        "config",
+        "world"
+    ];
+
+    // 3. Stop the server
+    let stop_status = Command::new("systemctl")
+        .args(["--user", "stop", "atm10.service"])
+        .status();
+    if !matches!(stop_status, Ok(s) if s.success()) {
+        return Json(json!({"error": "Failed to stop server"}));
+    }
+
+    // 4. Backup important files/folders
+    let _ = fs::remove_dir_all(&backup_dir).await; // Clean old backup
+    let _ = fs::create_dir_all(&backup_dir).await;
+    for item in files_to_backup.iter() {
+        let src = Path::new(&server_location).join(item);
+        let dst = Path::new(&backup_dir).join(item);
+        if src.exists() {
+            if src.is_dir() {
+                let _ = Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+            } else {
+                let _ = fs::copy(&src, &dst).await;
+            }
+        }
+    }
+
+    // 5. Delete the server directory
+    let _ = fs::remove_dir_all(&server_location).await;
+    let _ = fs::create_dir_all(&server_location).await;
+
+    // 6. Get latest server pack info from CurseForge
+    let api_url = "https://www.curseforge.com/api/v1/mods/925200/files/";
+    let client = reqwest::Client::new();
+    let resp = match client.get(api_url)
+        .header("User-Agent", "mc-manager/1.0 (https://github.com/xela/mc-manager)")
+        .send().await {
+        Ok(r) => r,
+        Err(_) => return Json(json!({"error": "Failed to fetch CurseForge API"})),
+    };
+    let api_json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return Json(json!({"error": "Failed to parse CurseForge API response"})),
+    };
+    let latest_file = api_json["data"].as_array()
+        .and_then(|arr| arr.iter().find(|file| file["hasServerPack"].as_bool() == Some(true)));
+    let file_id = latest_file.and_then(|file| file["id"].as_i64()).unwrap_or(0);
+    if file_id == 0 {
+        return Json(json!({"error": "Could not find latest server pack file id"}));
+    }
+    let download_url = format!("https://www.curseforge.com/api/v1/mods/925200/files/{}/download", file_id);
+    let zip_path = Path::new(&server_location).join("server.zip");
+    let mut resp = match client.get(&download_url)
+        .header("User-Agent", "mc-manager/1.0 (https://github.com/xela/mc-manager)")
+        .send().await {
+        Ok(r) => r,
+        Err(_) => return Json(json!({"error": "Failed to download server pack"})),
+    };
+    let mut out = match fs::File::create(&zip_path).await {
+        Ok(f) => f,
+        Err(_) => return Json(json!({"error": "Failed to create server.zip"})),
+    };
+    while let Some(chunk) = resp.chunk().await.unwrap_or(None) {
+        if out.write_all(&chunk).await.is_err() {
+            return Json(json!({"error": "Failed to write server.zip"}));
+        }
+    }
+
+    // 7. Unzip the server pack
+    let unzip_status = Command::new("unzip")
+        .arg(zip_path.to_str().unwrap())
+        .arg("-d")
+        .arg(&server_location)
+        .status();
+    if !matches!(unzip_status, Ok(s) if s.success()) {
+        return Json(json!({"error": "Failed to unzip server pack"}));
+    }
+    let _ = fs::remove_file(&zip_path).await;
+
+    // 8. Chmod startserver.sh
+    let start_script = Path::new(&server_location).join("startserver.sh");
+    if start_script.exists() {
+        let _ = fs::set_permissions(&start_script, Permissions::from_mode(0o755)).await;
+    }
+
+    // 9. Restore config/world/extra_mods
+    for item in files_to_backup.iter() {
+        let src = Path::new(&backup_dir).join(item);
+        let dst = Path::new(&server_location).join(item);
+        if src.exists() {
+            if src.is_dir() {
+                let _ = Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+            } else {
+                let _ = fs::copy(&src, &dst).await;
+            }
+        }
+    }
+    // Copy extra mods
+    let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| "extra_mods".to_string());
+    if let Ok(mut entries) = fs::read_dir(&extra_mods_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".jar") {
+                        let dest = Path::new(&server_location).join("mods").join(name);
+                        let _ = fs::copy(&path, &dest).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // 10. Start the server
+    let start_status = Command::new("systemctl")
+        .args(["--user", "start", "atm10.service"])
+        .status();
+    if !matches!(start_status, Ok(s) if s.success()) {
+        return Json(json!({"error": "Failed to start server"}));
+    }
+
+    Json(json!({"status": "Pack updated. Please verify your world and settings!"}))
+}
+
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
     let mut config = Config::release_default();
     config.address = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
+    config.limits = rocket::data::Limits::new()
+        .limit("file", ByteUnit::Megabyte(512))
+        .limit("form", ByteUnit::Megabyte(512));
     rocket::build()
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
+            "style-css" => ("src/page", "style.css"),
         ))
-        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras, log_tail])
+        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras, log_tail, check_pack_update, update_pack, style_css])
         .configure(config)
 }

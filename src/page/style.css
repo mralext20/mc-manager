@@ -1,0 +1,121 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #f4f4f4;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 50px;
+}
+.dashboard {
+    background: #fff;
+    padding: 30px 40px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    max-width: 1200px;
+    width: 100%;
+}
+button, a.button {
+    padding: 12px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 5px;
+    color: #fff;
+    background: #0078d4;
+    cursor: pointer;
+    transition: filter 0.2s;
+    text-decoration: none;
+    text-align: center;
+}
+button.start {
+    background: #28a745;
+}
+button.stop {
+    background: #dc3545;
+}
+button.restart {
+    background: #c05600; 
+}
+button:hover, a.button:hover {
+    filter: brightness(0.85);
+}
+.row {
+    display: flex;
+    gap: 15px;
+}
+.mods-list {
+    margin-top: 20px;
+}
+.mods-list h2 {
+    margin: 0 0 10px 0;
+    font-size: 18px;
+}
+#mods-list-ul {
+    list-style: none;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.mod-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #f7f7fa;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 10px 18px;
+    min-width: 0;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 15px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.mod-entry .mod-name {
+    flex: 1;
+    word-break: break-all;
+}
+.mod-entry button {
+    margin-left: 18px;
+}
+.log-section {
+    margin-top: 30px;
+    width: 100%;
+    max-width: 1200px;
+}
+.log-section h2 {
+    margin-bottom: 10px;
+    font-size: 18px;
+}
+#log-container {
+    background: #222;
+    color: #e0e0e0;
+    font-family: monospace;
+    font-size: 13px;
+    border-radius: 6px;
+    padding: 12px;
+    height: 350px;
+    overflow-y: scroll;
+    white-space: pre;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+#refresh-log-btn {
+    margin-bottom: 10px;
+    float: right;
+    background: #0078d4;
+}
+#update-pack-warning {
+    display: none;
+    color: #b94a48;
+    background: #f2dede;
+    border: 1px solid #ebccd1;
+    border-radius: 5px;
+    padding: 16px;
+    margin: 16px 0;
+    max-width: 700px;
+}

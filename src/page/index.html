@@ -3,119 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>MC Manager Dashboard</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f4f4f4;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding-top: 50px;
-        }
-        .dashboard {
-            background: #fff;
-            padding: 30px 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-            max-width: 1200px;
-            width: 100%;
-        }
-        button, a.button {
-            padding: 12px 24px;
-            font-size: 16px;
-            border: none;
-            border-radius: 5px;
-            color: #fff;
-            background: #0078d4;
-            cursor: pointer;
-            transition: filter 0.2s;
-            text-decoration: none;
-            text-align: center;
-        }
-        button.start {
-            background: #28a745;
-        }
-        button.stop {
-            background: #dc3545;
-        }
-        button.restart {
-            background: #c05600; 
-        }
-        button:hover, a.button:hover {
-            filter: brightness(0.85);
-        }
-        .row {
-            display: flex;
-            gap: 15px;
-        }
-        .mods-list {
-            margin-top: 20px;
-        }
-        .mods-list h2 {
-            margin: 0 0 10px 0;
-            font-size: 18px;
-        }
-        #mods-list-ul {
-            list-style: none;
-            padding: 0;
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            width: 100%;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .mod-entry {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background: #f7f7fa;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 10px 18px;
-            min-width: 0;
-            width: 100%;
-            box-sizing: border-box;
-            font-size: 15px;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-        }
-        .mod-entry .mod-name {
-            flex: 1;
-            word-break: break-all;
-        }
-        .mod-entry button {
-            margin-left: 18px;
-        }
-        .log-section {
-            margin-top: 30px;
-            width: 100%;
-            max-width: 1200px;
-        }
-        .log-section h2 {
-            margin-bottom: 10px;
-            font-size: 18px;
-        }
-        #log-container {
-            background: #222;
-            color: #e0e0e0;
-            font-family: monospace;
-            font-size: 13px;
-            border-radius: 6px;
-            padding: 12px;
-            height: 350px;
-            overflow-y: scroll;
-            white-space: pre;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-        }
-        #refresh-log-btn {
-            margin-bottom: 10px;
-            float: right;
-            background: #0078d4;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <h1>MC Manager Dashboard</h1>
@@ -125,6 +13,14 @@
             <button class="stop" onclick="sendAction('/stop')">Stop</button>
             <button class="restart" onclick="sendAction('/restart')">Restart</button>
             <button class="restart" onclick="sendAction('/update_extras')">Update Extras</button>
+            <button class="restart" onclick="updatePack()">Update Pack</button>
+            <button class="check-update" onclick="checkPackUpdate()">Check for Server Update</button>
+        </div>
+        <div id="update-pack-warning">
+            <b>Warning:</b> Updating the pack will delete your server folder and replace it with a new version. <b>You might lose data, be careful!</b> Your world and config will be backed up and restored, but always make your own backups!
+            <br><br>
+            <button onclick="doUpdatePack()" class="restart">I understand, update anyway</button>
+            <button onclick="hideUpdatePackWarning()" class="stop">Cancel</button>
         </div>
         <a class="button" href="/mods.zip" download>Download Extra Mods</a>
         <div class="mods-list">
@@ -220,6 +116,61 @@
             } catch {
                 logDiv.textContent = 'Failed to load log.';
             }
+        }
+        function updatePack() {
+            document.getElementById('update-pack-warning').style.display = 'block';
+        }
+        function hideUpdatePackWarning() {
+            document.getElementById('update-pack-warning').style.display = 'none';
+        }
+        async function doUpdatePack() {
+            hideUpdatePackWarning();
+            alert('Updating pack... this may take a while.');
+            try {
+                const resp = await fetch('/update_pack', { method: 'POST' });
+                if (!resp.ok) {
+                    alert('Update failed.');
+                    return;
+                }
+                const result = await resp.json();
+                // Show the JSON result in a pretty way on the page
+                showJsonResult(result);
+            } catch (e) {
+                alert('Update failed: ' + e);
+            }
+        }
+
+        function showJsonResult(result) {
+            let div = document.getElementById('update-pack-result');
+            if (!div) {
+                div = document.createElement('div');
+                div.id = 'update-pack-result';
+                div.style.background = '#f7f7fa';
+                div.style.border = '1px solid #e0e0e0';
+                div.style.borderRadius = '6px';
+                div.style.padding = '16px';
+                div.style.margin = '16px 0';
+                div.style.fontFamily = 'monospace';
+                div.style.whiteSpace = 'pre-wrap';
+                div.style.maxWidth = '900px';
+                div.style.wordBreak = 'break-all';
+                document.querySelector('.dashboard').appendChild(div);
+            }
+            div.textContent = JSON.stringify(result, null, 2);
+        }
+        async function checkPackUpdate() {
+            const resp = await fetch('/check_pack_update');
+            if (!resp.ok) {
+                alert('Failed to check for update.');
+                return;
+            }
+            const result = await resp.json();
+            if (result.error) {
+                alert('Error: ' + result.error);
+                return;
+            }
+            let msg = `Local version: ${result.local_version}\nLatest version: ${result.latest_version}\nUp to date: ${result.up_to_date}`;
+            alert(msg);
         }
         fetchMods();
         fetchLog();
