@@ -65,6 +65,32 @@
             align-items: center;
             gap: 10px;
         }
+        .log-section {
+            margin-top: 30px;
+            width: 100%;
+            max-width: 800px;
+        }
+        .log-section h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+        #log-container {
+            background: #222;
+            color: #e0e0e0;
+            font-family: monospace;
+            font-size: 13px;
+            border-radius: 6px;
+            padding: 12px;
+            height: 350px;
+            overflow-y: scroll;
+            white-space: pre;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+        #refresh-log-btn {
+            margin-bottom: 10px;
+            float: right;
+            background: #0078d4;
+        }
     </style>
 </head>
 <body>
@@ -84,6 +110,10 @@
                 <input type="file" id="mod-upload" name="mod" accept=".jar" required />
                 <button type="submit" class="start">Upload .jar</button>
             </form>
+        </div>
+        <div class="log-section">
+            <h2 style="margin-bottom:0;">Server Log <button id="refresh-log-btn" onclick="fetchLog()">Refresh</button></h2>
+            <div id="log-container">Loading log...</div>
         </div>
     </div>
     <script>
@@ -147,7 +177,24 @@
                 alert('Upload failed.');
             }
         });
+        async function fetchLog() {
+            const logDiv = document.getElementById('log-container');
+            logDiv.textContent = 'Loading log...';
+            try {
+                const resp = await fetch('/log_tail');
+                if (!resp.ok) {
+                    logDiv.textContent = 'Failed to load log.';
+                    return;
+                }
+                const text = await resp.text();
+                logDiv.textContent = text;
+                logDiv.scrollTop = logDiv.scrollHeight;
+            } catch {
+                logDiv.textContent = 'Failed to load log.';
+            }
+        }
         fetchMods();
+        fetchLog();
     </script>
 </body>
 </html>

@@ -199,6 +199,20 @@ async fn update_extras() -> Status {
     Status::Ok
 }
 
+#[get("/log_tail")]
+async fn log_tail() -> Option<String> {
+    // Use journalctl to get the last 1000 lines for the atm10.service (user scope)
+    let output = Command::new("journalctl")
+        .args(["--user", "-u", "atm10.service", "-n", "1000", "--no-pager"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        None
+    }
+}
+
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
     let mut config = Config::release_default();
@@ -207,6 +221,6 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
         ))
-        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras])
+        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras, log_tail])
         .configure(config)
 }
