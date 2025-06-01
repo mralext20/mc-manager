@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MC Manager Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f4f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding-top: 50px;
+        }
+        .dashboard {
+            background: #fff;
+            padding: 30px 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        button, a.button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            background: #0078d4;
+            color: #fff;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-decoration: none;
+            text-align: center;
+        }
+        button:hover, a.button:hover {
+            background: #005fa3;
+        }
+        .row {
+            display: flex;
+            gap: 15px;
+        }
+    </style>
+</head>
+<body>
+    <h1>MC Manager Dashboard</h1>
+    <div class="dashboard">
+        <div class="row">
+            <button onclick="sendAction('/start')">Start</button>
+            <button onclick="sendAction('/stop')">Stop</button>
+            <button onclick="sendAction('/restart')">Restart</button>
+        </div>
+        <a class="button" href="/mods.zip" download>Download Extra Mods</a>
+    </div>
+    <script>
+        function sendAction(endpoint) {
+            fetch(endpoint, { method: 'POST' })
+                .then(response => {
+                    if (response.ok) {
+                        alert('Action sent: ' + endpoint);
+                    } else {
+                        alert('Failed to send action: ' + endpoint);
+                    }
+                })
+                .catch(() => alert('Network error.'));
+        }
+    </script>
+</body>
+</html>
