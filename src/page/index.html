@@ -49,6 +49,22 @@
             display: flex;
             gap: 15px;
         }
+        .mods-list {
+            margin-top: 20px;
+        }
+        .mods-list h2 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+        #mods-list-ul {
+            list-style: none;
+            padding: 0;
+        }
+        #mods-list-ul li {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
     </style>
 </head>
 <body>
@@ -60,6 +76,14 @@
             <button class="restart" onclick="sendAction('/restart')">Restart</button>
         </div>
         <a class="button" href="/mods.zip" download>Download Extra Mods</a>
+        <div class="mods-list">
+            <h2>Extra Mods</h2>
+            <ul id="mods-list-ul" style="list-style:none; padding:0;"></ul>
+            <form id="upload-form" enctype="multipart/form-data" style="margin-top:20px;">
+                <input type="file" id="mod-upload" name="mod" accept=".jar" required />
+                <button type="submit" class="start">Upload .jar</button>
+            </form>
+        </div>
     </div>
     <script>
         function sendAction(endpoint) {
@@ -73,6 +97,55 @@
                 })
                 .catch(() => alert('Network error.'));
         }
+
+        async function fetchMods() {
+            const ul = document.getElementById('mods-list-ul');
+            ul.innerHTML = '';
+            try {
+                const resp = await fetch('/extra_mods_list');
+                if (!resp.ok) return;
+                const mods = await resp.json();
+                mods.forEach(mod => {
+                    const li = document.createElement('li');
+                    li.textContent = mod;
+                    const delBtn = document.createElement('button');
+                    delBtn.textContent = 'Delete';
+                    delBtn.className = 'stop';
+                    delBtn.onclick = () => deleteMod(mod);
+                    li.appendChild(delBtn);
+                    ul.appendChild(li);
+                });
+            } catch {}
+        }
+        async function deleteMod(mod) {
+            if (!confirm('Delete ' + mod + '?')) return;
+            const resp = await fetch('/extra_mods/' + encodeURIComponent(mod), { method: 'DELETE' });
+            if (resp.ok) fetchMods();
+            else alert('Failed to delete ' + mod);
+        }
+        document.getElementById('upload-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const input = document.getElementById('mod-upload');
+            if (!input.files.length) return;
+            const file = input.files[0];
+            if (!file.name.endsWith('.jar')) {
+                alert('Only .jar files are allowed!');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('mod', file);
+            const resp = await fetch('/extra_mods_upload', {
+                method: 'POST',
+                body: formData
+            });
+            if (resp.ok) {
+                fetchMods();
+                input.value = '';
+            } else {
+                alert('Upload failed.');
+            }
+        });
+        fetchMods();
     </script>
 </body>
 </html>
