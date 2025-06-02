@@ -272,8 +272,9 @@ async fn update_extras() -> Status {
         }
     };
     println!("[update_extras] Successfully parsed modlist.json");
-    let allowed_mods: Vec<String> = modlist["mods"].as_array().unwrap_or(&vec![])
-        .iter().filter_map(|m| m["file"].as_str().map(|s| s.to_string())).collect();
+    let allowed_mods: Vec<String> = modlist.as_object()
+        .map(|obj| obj.keys().cloned().collect())
+        .unwrap_or_else(Vec::new);
     println!("[update_extras] Allowed mods: {:?}", allowed_mods);
     // 4. Delete .jar files in mods/ that are not in modlist
     if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
