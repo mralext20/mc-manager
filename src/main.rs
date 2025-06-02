@@ -255,7 +255,7 @@ async fn update_extras() -> Status {
     let mods_dir = std::path::Path::new(&server_location).join("mods");
     let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     // 3. Read modlist.json from config/crash_assistant/modlist.json
-    let modlist_path = std::path::Path::new(MODLIST_PATH);
+    let modlist_path = std::path::Path::new(&server_location).join(MODLIST_PATH);
     let contents = match fs::read_to_string(&modlist_path).await {
         Ok(contents) => contents,
         Err(e) => {
