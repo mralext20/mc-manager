@@ -375,13 +375,13 @@ async fn update_extras() -> Status {
 }
 
 #[launch]
-fn rocket() -> _ {
-    let figment = Config::figment()
-        .merge(("address", "0.0.0.0"))
-        // Ensure the limit name "mod" matches the data = "<mod>" in the route
-        .merge(("limits", rocket::data::Limits::new().limit("mod", ByteUnit::Megabyte(100)))); 
-
-    rocket::custom(figment)
+fn rocket() -> rocket::Rocket<rocket::Build> {
+    let mut config = Config::release_default();
+    config.address = "0.0.0.0".parse().unwrap();
+    config.limits = rocket::data::Limits::new()
+        .limit("file", ByteUnit::Gibibyte(1)) // Increased file limit
+        .limit("form", ByteUnit::Gibibyte(1)); // Increased form limit
+    rocket::build()
         .mount("/", routes![
             index_html, 
             style_css, 
