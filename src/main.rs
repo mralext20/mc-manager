@@ -1,6 +1,7 @@
 #[macro_use] extern crate rocket;
 #[macro_use] extern crate rocket_include_static_resources;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use rocket::tokio::fs::{self, File};
 use rocket::tokio::io::AsyncReadExt;
@@ -377,10 +378,11 @@ async fn update_extras() -> Status {
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
     let mut config = Config::release_default();
-    config.address = "0.0.0.0".parse().unwrap();
+    config.address = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
     config.limits = rocket::data::Limits::new()
         .limit("file", ByteUnit::Gibibyte(1)) // Increased file limit
         .limit("form", ByteUnit::Gibibyte(1)); // Increased form limit
+    config.address;
     rocket::build()
         .mount("/", routes![
             index_html, 
