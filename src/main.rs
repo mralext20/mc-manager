@@ -382,8 +382,7 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
     config.limits = rocket::data::Limits::new()
         .limit("file", ByteUnit::Gibibyte(1)) // Increased file limit
         .limit("form", ByteUnit::Gibibyte(1)); // Increased form limit
-    config.address;
-    rocket::build()
+    rocket::custom(config) 
         .mount("/", routes![
             index_html, 
             style_css, 
