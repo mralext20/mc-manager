@@ -1,7 +1,6 @@
 #[macro_use] extern crate rocket;
 #[macro_use] extern crate rocket_include_static_resources;
 
-use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
 use rocket::tokio::fs::{self, File};
 use rocket::tokio::io::AsyncReadExt;
@@ -110,18 +109,53 @@ async fn delete_mod(modname: &str) -> &'static str {
     }
 }
 
-#[post("/extra_mods_upload", data = "<data>")]
-async fn extra_mods_upload(mut data: rocket::fs::TempFile<'_>) -> Result<Status, Status> {
+#[post("/extra_mods_upload", data = "<mod>")]
+async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status, Status> { // Parameter renamed to r#mod
     let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
-    let filename = data.name().map(|n| n.to_string()).unwrap_or_default();
+    
+    let filename = match r#mod.raw_name() { // Use r#mod here
+        Some(raw_name) => {
+            // This gets the actual filename provided by the client.
+            // It's "dangerous" as it's raw client input; ensure proper handling.
+            let fname_str = raw_name.dangerous_unsafe_unsanitized_raw().as_str();
+            if fname_str.is_empty() {
+                eprintln!("Uploaded file has an empty filename.");
+                return Err(Status::BadRequest);
+            }
+            println!("Received raw filename for upload: {}", fname_str);
+            fname_str.to_string()
+        }
+        None => {
+            eprintln!("Uploaded file is missing a filename.");
+            return Err(Status::BadRequest);
+        }
+    };
+
     if !filename.ends_with(".jar") {
+        eprintln!("Invalid file type or filename: '{}'. Must be a .jar file.", filename);
         return Err(Status::BadRequest);
     }
-    let dest = std::path::Path::new(&mods_dir).join(&filename);
-    if let Err(_) = data.persist_to(&dest).await {
+
+    println!("Processing upload for mod: {}", filename);
+
+    // Ensure the target directory exists
+    if let Err(e) = fs::create_dir_all(&mods_dir).await {
+        eprintln!("Failed to create mods directory '{}': {:?}", mods_dir, e);
         return Err(Status::InternalServerError);
     }
-    Ok(Status::Ok)
+
+    let dest_path = std::path::Path::new(&mods_dir).join(&filename);
+    
+    match r#mod.persist_to(&dest_path).await { // Use r#mod here
+        Ok(_) => {
+            println!("Successfully saved mod to: {}", dest_path.display());
+            Ok(Status::Ok)
+        }
+        Err(e) => {
+            eprintln!("Failed to persist uploaded file '{}' to '{}': {:?}", filename, dest_path.display(), e);
+            Err(Status::InternalServerError)
+        }
+    }
 }
 
 #[post("/backup_server")]
@@ -341,17 +375,31 @@ async fn update_extras() -> Status {
 }
 
 #[launch]
-fn rocket() -> rocket::Rocket<rocket::Build> {
-    let mut config = Config::release_default();
-    config.address = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
-    config.limits = rocket::data::Limits::new()
-        .limit("file", ByteUnit::Megabyte(512))
-        .limit("form", ByteUnit::Megabyte(512));
-    rocket::build()
+fn rocket() -> _ {
+    let figment = Config::figment()
+        .merge(("address", "0.0.0.0"))
+        // Ensure the limit name "mod" matches the data = "<mod>" in the route
+        .merge(("limits", rocket::data::Limits::new().limit("mod", ByteUnit::Megabyte(100)))); 
+
+    rocket::custom(figment)
+        .mount("/", routes![
+            index_html, 
+            style_css, 
+            start, 
+            stop, 
+            restart, 
+            download_mods, 
+            extra_mods_list, 
+            delete_mod, 
+            extra_mods_upload, 
+            update_extras, 
+            log_tail, 
+            check_server_update, 
+            backup_server, 
+            restore_server
+        ])
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
             "style-css" => ("src/page", "style.css"),
         ))
-        .mount("/", routes![index_html, start, stop, restart, download_mods, extra_mods_list, delete_mod, extra_mods_upload, update_extras, log_tail, check_server_update, backup_server, restore_server, style_css])
-        .configure(config)
 }
