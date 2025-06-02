@@ -131,6 +131,24 @@ async fn backup_server() -> Json<serde_json::Value> {
     let files_to_backup = FILES_TO_BACKUP;
     let _ = rocket::tokio::fs::remove_dir_all(&backup_dir).await;
     let _ = rocket::tokio::fs::create_dir_all(&backup_dir).await;
+    // Write mods.list before backup
+    let mods_dir = std::path::Path::new(&server_location).join("mods");
+    let mods_list_path = std::path::Path::new(&server_location).join("mods.list");
+    if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
+        let mut mod_names = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with(".jar") {
+                        mod_names.push(name.to_string());
+                    }
+                }
+            }
+        }
+        let mods_list_content = mod_names.join("\n");
+        let _ = fs::write(&mods_list_path, mods_list_content).await;
+    }
     for item in files_to_backup.iter() {
         let src = std::path::Path::new(&server_location).join(item);
         let dst = std::path::Path::new(&backup_dir).join(item);
@@ -190,6 +208,26 @@ async fn restore_server() -> Json<serde_json::Value> {
     // chmod +x startserver.sh
     let start_script = std::path::Path::new(&server_location).join("startserver.sh");
     let _ = std::process::Command::new("chmod").arg("+x").arg(start_script).status();
+    // On restore: if mods.list does not exist, generate it from current mods directory
+    let mods_list_dst = std::path::Path::new(&server_location).join("mods.list");
+    if !mods_list_dst.exists() {
+        let mods_dir = std::path::Path::new(&server_location).join("mods");
+        if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
+            let mut mod_names = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.ends_with(".jar") {
+                            mod_names.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            let mods_list_content = mod_names.join("\n");
+            let _ = fs::write(&mods_list_dst, mods_list_content).await;
+        }
+    }
     Json(json!({"status": "Restore complete"}))
 }
 
@@ -254,29 +292,17 @@ async fn update_extras() -> Status {
     let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| DEFAULT_SERVER_LOCATION.to_string());
     let mods_dir = std::path::Path::new(&server_location).join("mods");
     let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
-    // 3. Read modlist.json from config/crash_assistant/modlist.json
-    let modlist_path = std::path::Path::new(&server_location).join(MODLIST_PATH);
-    let contents = match fs::read_to_string(&modlist_path).await {
-        Ok(contents) => contents,
+    // 3. Read allowed mods from mods.list in the server directory
+    let mods_list_path = std::path::Path::new(&server_location).join("mods.list");
+    let allowed_mods: Vec<String> = match fs::read_to_string(&mods_list_path).await {
+        Ok(contents) => contents.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         Err(e) => {
-            println!("[update_extras] Failed to read modlist.json at {}: {}", modlist_path.display(), e);
-            panic!("Failed to read modlist.json: {}", e);
+            println!("[update_extras] Failed to read mods.list at {}: {}", mods_list_path.display(), e);
+            panic!("Failed to read mods.list: {}", e);
         }
     };
-    println!("[update_extras] Successfully read modlist.json");
-    let modlist: serde_json::Value = match serde_json::from_str(&contents) {
-        Ok(val) => val,
-        Err(e) => {
-            println!("[update_extras] Failed to parse modlist.json: {}", e);
-            panic!("Failed to parse modlist.json: {}", e);
-        }
-    };
-    println!("[update_extras] Successfully parsed modlist.json");
-    let allowed_mods: Vec<String> = modlist.as_object()
-        .map(|obj| obj.keys().cloned().collect())
-        .unwrap_or_else(Vec::new);
-    println!("[update_extras] Allowed mods: {:?}", allowed_mods);
-    // 4. Delete .jar files in mods/ that are not in modlist
+    println!("[update_extras] Allowed mods from mods.list: {:?}", allowed_mods);
+    // 4. Delete .jar files in mods/ that are not in allowed_mods
     if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
