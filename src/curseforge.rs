@@ -1,6 +1,6 @@
 use serde::{Deserialize};
 use reqwest::Client;
-use regex::Regex;
+use semver::Version;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
@@ -80,11 +80,15 @@ pub async fn fetch_latest_server_pack(client: &Client) -> Result<ServerPackInfo,
         .collect();
     server_packs.sort_by_key(|file| -file.id);
     let latest = server_packs.first().ok_or("No server pack found")?;
-    let version_re = Regex::new(r#"([\d.]+)"#).unwrap();
-    let version = version_re.captures(&latest.display_name)
-        .and_then(|cap| cap.get(1))
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    // Extract version by splitting on the last '-' character
+    let version_str = match latest.display_name.rsplit_once('-') {
+        Some((_, v)) => v.trim(),
+        None => "unknown",
+    };
+    // Try to parse as semver, fallback to string if not possible
+    let version = Version::parse(version_str)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| version_str.to_string());
     Ok(ServerPackInfo {
         version,
     })

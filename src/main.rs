@@ -13,6 +13,7 @@ use rocket::http::Status;
 use std::io::Write; // Needed for ZipWriter::write_all
 use rocket::serde::json::{Json, json};
 use rocket::data::ByteUnit;
+use semver::Version;
 
 mod constants;
 mod serverctl;
@@ -197,16 +198,20 @@ async fn check_server_update() -> Json<serde_json::Value> {
     }
     let local_version = local_version.unwrap();
     // 2. Fetch the latest modpack version from CurseForge API using the curseforge module
-    // (Assume fetch_latest_server_pack is available and returns a struct with .version)
     let client = reqwest::Client::new();
     let latest = match fetch_latest_server_pack(&client).await {
         Ok(info) => info,
         Err(e) => return Json(json!({"error": e})),
     };
+    // 3. Compare using semver if possible
+    let up_to_date = match (Version::parse(&local_version), Version::parse(&latest.version)) {
+        (Ok(local), Ok(latest)) => local == latest,
+        _ => local_version == latest.version,
+    };
     Json(json!({
         "local_version": local_version,
         "latest_version": latest.version,
-        "up_to_date": local_version == latest.version
+        "up_to_date": up_to_date
     }))
 }
 
@@ -221,7 +226,7 @@ async fn update_extras() -> Status {
     let mods_dir = std::path::Path::new(&server_location).join("mods");
     let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     // 3. Read modlist.json from config/crash_assistant/modlist.json
-    let modlist_path = std::path::Path::new(MODLIST_PATH);
+    let modlist_path = std::path::Path::new("config/crash_assistant/modlist.json");
     let modlist: Option<serde_json::Value> = match fs::read_to_string(&modlist_path).await {
         Ok(contents) => serde_json::from_str(&contents).ok(),
         Err(_) => None,
