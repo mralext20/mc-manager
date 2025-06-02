@@ -14,6 +14,7 @@ use std::io::Write; // Needed for ZipWriter::write_all
 use rocket::serde::json::{Json, json};
 use rocket::data::ByteUnit;
 use semver::Version;
+use rocket::Request;
 
 mod constants;
 mod serverctl;
@@ -111,13 +112,12 @@ async fn delete_mod(modname: &str) -> &'static str {
 }
 
 #[post("/extra_mods_upload", data = "<mod>")]
-async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status, Status> { // Parameter renamed to r#mod
+async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status, Status> {
     let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
-    
-    let filename = match r#mod.raw_name() { // Use r#mod here
+
+    // Try to get the filename from the uploaded file, fallback to Content-Disposition if needed
+    let filename = match r#mod.raw_name() {
         Some(raw_name) => {
-            // This gets the actual filename provided by the client.
-            // It's "dangerous" as it's raw client input; ensure proper handling.
             let fname_str = raw_name.dangerous_unsafe_unsanitized_raw().as_str();
             if fname_str.is_empty() {
                 eprintln!("Uploaded file has an empty filename.");
@@ -127,8 +127,19 @@ async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status
             fname_str.to_string()
         }
         None => {
-            eprintln!("Uploaded file is missing a filename.");
-            return Err(Status::BadRequest);
+            // Try to get the name from the form field (for some clients)
+            if let Some(name) = r#mod.name() {
+                if !name.is_empty() && name.ends_with(".jar") {
+                    println!("Fallback: using form field name as filename: {}", name);
+                    name.to_string()
+                } else {
+                    eprintln!("Uploaded file is missing a filename.");
+                    return Err(Status::BadRequest);
+                }
+            } else {
+                eprintln!("Uploaded file is missing a filename.");
+                return Err(Status::BadRequest);
+            }
         }
     };
 
@@ -146,8 +157,8 @@ async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status
     }
 
     let dest_path = std::path::Path::new(&mods_dir).join(&filename);
-    
-    match r#mod.persist_to(&dest_path).await { // Use r#mod here
+
+    match r#mod.persist_to(&dest_path).await {
         Ok(_) => {
             println!("Successfully saved mod to: {}", dest_path.display());
             Ok(Status::Ok)
@@ -375,6 +386,11 @@ async fn update_extras() -> Status {
     Status::Ok
 }
 
+#[catch(400)]
+fn bad_request(_req: &Request) -> &'static str {
+    "400 Bad Request: The request was malformed or missing required data (e.g., file upload missing filename)."
+}
+
 #[launch]
 fn rocket() -> rocket::Rocket<rocket::Build> {
     let mut config = Config::release_default();
@@ -399,6 +415,7 @@ fn rocket() -> rocket::Rocket<rocket::Build> {
             backup_server, 
             restore_server
         ])
+        .register("/", catchers![bad_request])
         .attach(static_resources_initializer!(
             "index-html" => ("src/page", "index.html"),
             "style-css" => ("src/page", "style.css"),
