@@ -161,6 +161,35 @@ async fn restore_server() -> Json<serde_json::Value> {
             }
         }
     }
+    // Patch server.properties MOTD and chmod start script after restore
+    let config_path = std::path::Path::new(&server_location).join("config/bcc-common.toml");
+    // Extract version from bcc-common.toml
+    let version = if let Ok(mut file) = File::open(&config_path).await {
+        let mut contents = String::new();
+        if file.read_to_string(&mut contents).await.is_ok() {
+            let re = regex::Regex::new(r#"modpackVersion\s*=\s*\"([^\"]*)\""#).unwrap();
+            re.captures(&contents).and_then(|cap| cap.get(1)).map(|m| m.as_str().to_string())
+        } else { None }
+    } else { None };
+    let server_properties_path = std::path::Path::new(&server_location).join("server.properties");
+    if let Some(version_val) = version {
+        let motd_val = format!("V{} + extras", version_val);
+        if let Ok(mut file) = File::open(&server_properties_path).await {
+            let mut contents = String::new();
+            if file.read_to_string(&mut contents).await.is_ok() {
+                let motd_re = regex::Regex::new(r"(?m)^motd\s*=.*$").unwrap();
+                let new_contents = if motd_re.is_match(&contents) {
+                    motd_re.replace(&contents, format!("motd={}", motd_val)).to_string()
+                } else {
+                    format!("{}\nmotd={}", contents.trim_end(), motd_val)
+                };
+                let _ = rocket::tokio::fs::write(&server_properties_path, new_contents).await;
+            }
+        }
+    }
+    // chmod +x startserver.sh
+    let start_script = std::path::Path::new(&server_location).join("startserver.sh");
+    let _ = std::process::Command::new("chmod").arg("+x").arg(start_script).status();
     Json(json!({"status": "Restore complete"}))
 }
 
