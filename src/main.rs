@@ -256,15 +256,25 @@ async fn update_extras() -> Status {
     let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     // 3. Read modlist.json from config/crash_assistant/modlist.json
     let modlist_path = std::path::Path::new(MODLIST_PATH);
-    let modlist: Option<serde_json::Value> = match fs::read_to_string(&modlist_path).await {
-        Ok(contents) => serde_json::from_str(&contents).ok(),
-        Err(_) => None,
+    let contents = match fs::read_to_string(&modlist_path).await {
+        Ok(contents) => contents,
+        Err(e) => {
+            println!("[update_extras] Failed to read modlist.json at {}: {}", modlist_path.display(), e);
+            panic!("Failed to read modlist.json: {}", e);
+        }
     };
-    let allowed_mods: Vec<String> = match &modlist {
-        Some(list) => list["mods"].as_array().unwrap_or(&vec![])
-            .iter().filter_map(|m| m["file"].as_str().map(|s| s.to_string())).collect(),
-        None => Vec::new(),
+    println!("[update_extras] Successfully read modlist.json");
+    let modlist: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(val) => val,
+        Err(e) => {
+            println!("[update_extras] Failed to parse modlist.json: {}", e);
+            panic!("Failed to parse modlist.json: {}", e);
+        }
     };
+    println!("[update_extras] Successfully parsed modlist.json");
+    let allowed_mods: Vec<String> = modlist["mods"].as_array().unwrap_or(&vec![])
+        .iter().filter_map(|m| m["file"].as_str().map(|s| s.to_string())).collect();
+    println!("[update_extras] Allowed mods: {:?}", allowed_mods);
     // 4. Delete .jar files in mods/ that are not in modlist
     if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -272,11 +282,15 @@ async fn update_extras() -> Status {
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.ends_with(".jar") && !allowed_mods.contains(&name.to_string()) {
+                        println!("[update_extras] Removing disallowed mod: {}", name);
                         let _ = fs::remove_file(&path).await;
                     }
                 }
             }
         }
+    } else {
+        println!("[update_extras] Failed to read mods directory: {}", mods_dir.display());
+        panic!("Failed to read mods directory: {}", mods_dir.display());
     }
     // 5. Copy all .jar files from extra_mods to mods
     if let Ok(mut entries) = fs::read_dir(&extra_mods_dir).await {
