@@ -13,14 +13,9 @@
             <button class="stop" onclick="sendAction('/stop')">Stop</button>
             <button class="restart" onclick="sendAction('/restart')">Restart</button>
             <button class="restart" onclick="sendAction('/update_extras')">Update Extras</button>
-            <button class="restart" onclick="updatePack()">Update Pack</button>
             <button class="check-update" onclick="checkPackUpdate()">Check for Server Update</button>
-        </div>
-        <div id="update-pack-warning">
-            <b>Warning:</b> Updating the pack will delete your server folder and replace it with a new version. <b>You might lose data, be careful!</b> Your world and config will be backed up and restored, but always make your own backups!
-            <br><br>
-            <button onclick="doUpdatePack()" class="restart">I understand, update anyway</button>
-            <button onclick="hideUpdatePackWarning()" class="stop">Cancel</button>
+            <button class="backup" onclick="confirmAndBackup()">Backup Server</button>
+            <button class="restore" onclick="confirmAndRestore()">Restore Server</button>
         </div>
         <a class="button" href="/mods.zip" download>Download Extra Mods</a>
         <div class="mods-list">
@@ -117,29 +112,6 @@
                 logDiv.textContent = 'Failed to load log.';
             }
         }
-        function updatePack() {
-            document.getElementById('update-pack-warning').style.display = 'block';
-        }
-        function hideUpdatePackWarning() {
-            document.getElementById('update-pack-warning').style.display = 'none';
-        }
-        async function doUpdatePack() {
-            hideUpdatePackWarning();
-            alert('Updating pack... this may take a while.');
-            try {
-                const resp = await fetch('/update_pack', { method: 'POST' });
-                if (!resp.ok) {
-                    alert('Update failed.');
-                    return;
-                }
-                const result = await resp.json();
-                // Show the JSON result in a pretty way on the page
-                showJsonResult(result);
-            } catch (e) {
-                alert('Update failed: ' + e);
-            }
-        }
-
         function showJsonResult(result) {
             let div = document.getElementById('update-pack-result');
             if (!div) {
@@ -171,6 +143,18 @@
             }
             let msg = `Local version: ${result.local_version}\nLatest version: ${result.latest_version}\nUp to date: ${result.up_to_date}`;
             alert(msg);
+        }
+        async function confirmAndBackup() {
+            if (!confirm("By clicking OK I am xela and know what I'm doing. Proceed with BACKUP?")) return;
+            const resp = await fetch('/backup_server', { method: 'POST' });
+            const result = await resp.json();
+            showJsonResult(result);
+        }
+        async function confirmAndRestore() {
+            if (!confirm("By clicking OK I am xela and know what I'm doing. Proceed with RESTORE?")) return;
+            const resp = await fetch('/restore_server', { method: 'POST' });
+            const result = await resp.json();
+            showJsonResult(result);
         }
         fetchMods();
         fetchLog();
