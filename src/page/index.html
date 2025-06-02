@@ -131,7 +131,7 @@
             div.textContent = JSON.stringify(result, null, 2);
         }
         async function checkPackUpdate() {
-            const resp = await fetch('/check_pack_update');
+            const resp = await fetch('/check_server_update');
             if (!resp.ok) {
                 alert('Failed to check for update.');
                 return;
