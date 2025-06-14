@@ -22,7 +22,7 @@
             <h2>Extra Mods</h2>
             <ul id="mods-list-ul" style="list-style:none; padding:0;"></ul>
             <form id="upload-form" enctype="multipart/form-data" style="margin-top:20px;">
-                <input type="file" id="mod-upload" name="mod" accept=".jar" required />
+                <input type="file" id="mod-upload" name="mod_file" accept=".jar" required />
                 <button type="submit" class="start">Upload .jar</button>
             </form>
         </div>
@@ -84,7 +84,7 @@
                 return;
             }
             const formData = new FormData();
-            formData.append('mod', file);
+            formData.append('mod_file', file);
             const resp = await fetch('/extra_mods_upload', {
                 method: 'POST',
                 body: formData

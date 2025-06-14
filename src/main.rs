@@ -15,6 +15,8 @@ use rocket::serde::json::{Json, json};
 use rocket::data::ByteUnit;
 use semver::Version;
 use rocket::Request;
+use rocket::form::Form;
+use rocket::fs::TempFile;
 
 mod constants;
 mod serverctl;
@@ -111,12 +113,17 @@ async fn delete_mod(modname: &str) -> &'static str {
     }
 }
 
-#[post("/extra_mods_upload", data = "<mod>")]
-async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status, Status> {
-    let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
+#[derive(FromForm)]
+pub struct ModUpload<'r> {
+    mod_file: TempFile<'r>,
+}
 
-    // Try to get the filename from the uploaded file, fallback to Content-Disposition if needed
-    let filename = match r#mod.raw_name() {
+#[post("/extra_mods_upload", data = "<form>")]
+async fn extra_mods_upload(mut form: Form<ModUpload<'_>>) -> Result<Status, Status> {
+    let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
+    let mod_file = &mut form.mod_file;
+
+    let filename = match mod_file.raw_name() {
         Some(raw_name) => {
             let fname_str = raw_name.dangerous_unsafe_unsanitized_raw().as_str();
             if fname_str.is_empty() {
@@ -127,19 +134,8 @@ async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status
             fname_str.to_string()
         }
         None => {
-            // Try to get the name from the form field (for some clients)
-            if let Some(name) = r#mod.name() {
-                if !name.is_empty() && name.ends_with(".jar") {
-                    println!("Fallback: using form field name as filename: {}", name);
-                    name.to_string()
-                } else {
-                    eprintln!("Uploaded file is missing a filename.");
-                    return Err(Status::BadRequest);
-                }
-            } else {
-                eprintln!("Uploaded file is missing a filename.");
-                return Err(Status::BadRequest);
-            }
+            eprintln!("Uploaded file is missing a filename.");
+            return Err(Status::BadRequest);
         }
     };
 
@@ -150,7 +146,6 @@ async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status
 
     println!("Processing upload for mod: {}", filename);
 
-    // Ensure the target directory exists
     if let Err(e) = fs::create_dir_all(&mods_dir).await {
         eprintln!("Failed to create mods directory '{}': {:?}", mods_dir, e);
         return Err(Status::InternalServerError);
@@ -158,13 +153,13 @@ async fn extra_mods_upload(mut r#mod: rocket::fs::TempFile<'_>) -> Result<Status
 
     let dest_path = std::path::Path::new(&mods_dir).join(&filename);
 
-    match r#mod.persist_to(&dest_path).await {
+    match mod_file.copy_to(&dest_path).await {
         Ok(_) => {
             println!("Successfully saved mod to: {}", dest_path.display());
             Ok(Status::Ok)
         }
         Err(e) => {
-            eprintln!("Failed to persist uploaded file '{}' to '{}': {:?}", filename, dest_path.display(), e);
+            eprintln!("Failed to write uploaded file '{}' to '{}': {:?}", filename, dest_path.display(), e);
             Err(Status::InternalServerError)
         }
     }
