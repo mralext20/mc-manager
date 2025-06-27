@@ -59,57 +59,98 @@ fn restart() -> &'static str {
 }
 
 #[get("/mods.zip")]
-async fn download_mods() -> Option<(rocket::http::ContentType, Vec<u8>)> {
+async fn download_mods() -> Result<(rocket::http::ContentType, Vec<u8>), (Status, String)> {
     let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     let mut buffer = Vec::new();
     {
         let mut writer = ZipWriter::new(std::io::Cursor::new(&mut buffer));
         let options: FileOptions<ExtendedFileOptions> = FileOptions::default();
-        if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if let Ok(mut f) = File::open(&path).await {
-                            let mut file_buf = Vec::new();
-                            if f.read_to_end(&mut file_buf).await.is_ok() {
-                                let _ = writer.start_file(name, options.clone());
-                                let _ = writer.write_all(&file_buf);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let _ = writer.finish();
-    }
-    Some((rocket::http::ContentType::new("application", "zip"), buffer))
-}
 
-#[get("/extra_mods_list")]
-async fn extra_mods_list() -> RawJson<String> {
-    let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
-    let mut mods = Vec::new();
-    if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
+        let mut entries = match fs::read_dir(&mods_dir).await {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("Failed to read mods directory '{}': {:?}", mods_dir, e);
+                return Err((Status::InternalServerError, "Failed to read mods directory.".to_string()));
+            }
+        };
+
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    mods.push(name.to_string());
+                    let mut f = match File::open(&path).await {
+                        Ok(f) => f,
+                        Err(e) => {
+                            eprintln!("Failed to open file '{}': {:?}", path.display(), e);
+                            continue;
+                        }
+                    };
+                    let mut file_buf = Vec::new();
+                    if let Err(e) = f.read_to_end(&mut file_buf).await {
+                        eprintln!("Failed to read file '{}': {:?}", path.display(), e);
+                        continue;
+                    }
+                    if let Err(e) = writer.start_file(name, options.clone()) {
+                        eprintln!("Failed to start zip entry for '{}': {:?}", name, e);
+                        continue;
+                    }
+                    if let Err(e) = writer.write_all(&file_buf) {
+                        eprintln!("Failed to write to zip entry for '{}': {:?}", name, e);
+                        continue;
+                    }
                 }
             }
         }
+
+        if let Err(e) = writer.finish() {
+            eprintln!("Failed to finalize zip archive: {:?}", e);
+            return Err((Status::InternalServerError, "Failed to create zip archive.".to_string()));
+        }
     }
-    RawJson(serde_json::to_string(&mods).unwrap())
+    Ok((rocket::http::ContentType::new("application", "zip"), buffer))
+}
+
+#[get("/extra_mods_list")]
+async fn extra_mods_list() -> Result<RawJson<String>, (Status, String)> {
+    let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
+    let mut mods = Vec::new();
+
+    let mut entries = match fs::read_dir(&mods_dir).await {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Failed to read mods directory '{}': {:?}", mods_dir, e);
+            return Err((Status::InternalServerError, "Failed to read mods directory.".to_string()));
+        }
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                mods.push(name.to_string());
+            }
+        }
+    }
+
+    match serde_json::to_string(&mods) {
+        Ok(json) => Ok(RawJson(json)),
+        Err(e) => {
+            eprintln!("Failed to serialize mod list: {:?}", e);
+            Err((Status::InternalServerError, "Failed to serialize mod list.".to_string()))
+        }
+    }
 }
 
 #[delete("/extra_mods/<modname>")]
-async fn delete_mod(modname: &str) -> &'static str {
+async fn delete_mod(modname: &str) -> Result<Status, (Status, String)> {
     let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     let path = std::path::Path::new(&mods_dir).join(modname);
     match remove_file(&path).await {
-        Ok(_) => "OK",
-        Err(_) => "FAIL",
+        Ok(_) => Ok(Status::Ok),
+        Err(e) => {
+            eprintln!("Failed to delete mod '{}': {:?}", modname, e);
+            Err((Status::InternalServerError, format!("Failed to delete mod: {}", e)))
+        }
     }
 }
 
@@ -119,39 +160,38 @@ pub struct ModUpload<'r> {
 }
 
 #[post("/extra_mods_upload", data = "<form>")]
-async fn extra_mods_upload(mut form: Form<ModUpload<'_>>) -> Result<Status, Status> {
+async fn extra_mods_upload(mut form: Form<ModUpload<'_>>) -> Result<Status, (Status, String)> {
     let mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
     let mod_file = &mut form.mod_file;
 
-    let filename = match mod_file.raw_name() {
-        Some(raw_name) => {
-            let fname_str = raw_name.dangerous_unsafe_unsanitized_raw().as_str();
-            if fname_str.is_empty() {
-                eprintln!("Uploaded file has an empty filename.");
-                return Err(Status::BadRequest);
-            }
-            println!("Received raw filename for upload: {}", fname_str);
-            fname_str.to_string()
-        }
+    let filename = match mod_file.name() {
+        Some(name) => name.to_string(),
         None => {
-            eprintln!("Uploaded file is missing a filename.");
-            return Err(Status::BadRequest);
+            return Err((Status::BadRequest, "File is missing a filename.".to_string()));
         }
     };
 
-    if !filename.ends_with(".jar") {
-        eprintln!("Invalid file type or filename: '{}'. Must be a .jar file.", filename);
-        return Err(Status::BadRequest);
+    // Sanitize the filename to prevent path traversal attacks.
+    let sanitized_filename = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+
+    if sanitized_filename.is_empty() {
+        return Err((Status::BadRequest, "Filename is empty or invalid.".to_string()));
     }
 
-    println!("Processing upload for mod: {}", filename);
+    if !sanitized_filename.ends_with(".jar") {
+        return Err((Status::BadRequest, "Invalid file type. Only .jar files are allowed.".to_string()));
+    }
 
     if let Err(e) = fs::create_dir_all(&mods_dir).await {
         eprintln!("Failed to create mods directory '{}': {:?}", mods_dir, e);
-        return Err(Status::InternalServerError);
+        return Err((Status::InternalServerError, "Failed to create mods directory.".to_string()));
     }
 
-    let dest_path = std::path::Path::new(&mods_dir).join(&filename);
+    let dest_path = std::path::Path::new(&mods_dir).join(&sanitized_filename);
 
     match mod_file.copy_to(&dest_path).await {
         Ok(_) => {
@@ -159,22 +199,33 @@ async fn extra_mods_upload(mut form: Form<ModUpload<'_>>) -> Result<Status, Stat
             Ok(Status::Ok)
         }
         Err(e) => {
-            eprintln!("Failed to write uploaded file '{}' to '{}': {:?}", filename, dest_path.display(), e);
-            Err(Status::InternalServerError)
+            eprintln!("Failed to write uploaded file '{}' to '{}': {:?}", sanitized_filename, dest_path.display(), e);
+            Err((Status::InternalServerError, "Failed to save uploaded file.".to_string()))
         }
     }
 }
 
 #[post("/backup_server")]
-async fn backup_server() -> Json<serde_json::Value> {
+async fn backup_server() -> Result<Json<serde_json::Value>, (Status, String)> {
     let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| DEFAULT_SERVER_LOCATION.to_string());
     let backup_dir = format!("{}_backup", server_location);
     let files_to_backup = FILES_TO_BACKUP;
-    let _ = rocket::tokio::fs::remove_dir_all(&backup_dir).await;
-    let _ = rocket::tokio::fs::create_dir_all(&backup_dir).await;
-    // Write mods.list before backup
+
+    if let Err(e) = fs::remove_dir_all(&backup_dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("Failed to remove existing backup directory: {:?}", e);
+            return Err((Status::InternalServerError, "Failed to remove existing backup directory.".to_string()));
+        }
+    }
+
+    if let Err(e) = fs::create_dir_all(&backup_dir).await {
+        eprintln!("Failed to create backup directory: {:?}", e);
+        return Err((Status::InternalServerError, "Failed to create backup directory.".to_string()));
+    }
+
     let mods_dir = std::path::Path::new(&server_location).join("mods");
     let mods_list_path = std::path::Path::new(&server_location).join("mods.list");
+
     if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
         let mut mod_names = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
@@ -188,41 +239,60 @@ async fn backup_server() -> Json<serde_json::Value> {
             }
         }
         let mods_list_content = mod_names.join("\n");
-        let _ = fs::write(&mods_list_path, mods_list_content).await;
+        if let Err(e) = fs::write(&mods_list_path, mods_list_content).await {
+            eprintln!("Failed to write mods.list: {:?}", e);
+            return Err((Status::InternalServerError, "Failed to write mods.list.".to_string()));
+        }
     }
+
     for item in files_to_backup.iter() {
         let src = std::path::Path::new(&server_location).join(item);
         let dst = std::path::Path::new(&backup_dir).join(item);
         if src.exists() {
             if src.is_dir() {
-                let _ = std::process::Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+                let status = Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+                if !status.map_or(false, |s| s.success()) {
+                    eprintln!("Failed to copy directory from {} to {}", src.display(), dst.display());
+                    return Err((Status::InternalServerError, "Failed to copy directory.".to_string()));
+                }
             } else {
-                let _ = rocket::tokio::fs::copy(&src, &dst).await;
+                if let Err(e) = fs::copy(&src, &dst).await {
+                    eprintln!("Failed to copy file from {} to {}: {:?}", src.display(), dst.display(), e);
+                    return Err((Status::InternalServerError, "Failed to copy file.".to_string()));
+                }
             }
         }
     }
-    Json(json!({"status": "Backup complete"}))
+
+    Ok(Json(json!({"status": "Backup complete"})))
 }
 
 #[post("/restore_server")]
-async fn restore_server() -> Json<serde_json::Value> {
+async fn restore_server() -> Result<Json<serde_json::Value>, (Status, String)> {
     let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| DEFAULT_SERVER_LOCATION.to_string());
     let backup_dir = format!("{}_backup", server_location);
     let files_to_backup = FILES_TO_BACKUP;
+
     for item in files_to_backup.iter() {
         let src = std::path::Path::new(&backup_dir).join(item);
         let dst = std::path::Path::new(&server_location).join(item);
         if src.exists() {
             if src.is_dir() {
-                let _ = std::process::Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+                let status = Command::new("cp").args(["-r", src.to_str().unwrap(), dst.to_str().unwrap()]).status();
+                if !status.map_or(false, |s| s.success()) {
+                    eprintln!("Failed to copy directory from {} to {}", src.display(), dst.display());
+                    return Err((Status::InternalServerError, "Failed to copy directory.".to_string()));
+                }
             } else {
-                let _ = rocket::tokio::fs::copy(&src, &dst).await;
+                if let Err(e) = fs::copy(&src, &dst).await {
+                    eprintln!("Failed to copy file from {} to {}: {:?}", src.display(), dst.display(), e);
+                    return Err((Status::InternalServerError, "Failed to copy file.".to_string()));
+                }
             }
         }
     }
-    // Patch server.properties MOTD and chmod start script after restore
+
     let config_path = std::path::Path::new(&server_location).join("config/bcc-common.toml");
-    // Extract version from bcc-common.toml
     let version = if let Ok(mut file) = File::open(&config_path).await {
         let mut contents = String::new();
         if file.read_to_string(&mut contents).await.is_ok() {
@@ -230,6 +300,7 @@ async fn restore_server() -> Json<serde_json::Value> {
             re.captures(&contents).and_then(|cap| cap.get(1)).map(|m| m.as_str().to_string())
         } else { None }
     } else { None };
+
     let server_properties_path = std::path::Path::new(&server_location).join("server.properties");
     if let Some(version_val) = version {
         let motd_val = format!("V{} + extras", version_val);
@@ -242,14 +313,21 @@ async fn restore_server() -> Json<serde_json::Value> {
                 } else {
                     format!("{}\nmotd={}", contents.trim_end(), motd_val)
                 };
-                let _ = rocket::tokio::fs::write(&server_properties_path, new_contents).await;
+                if let Err(e) = fs::write(&server_properties_path, new_contents).await {
+                    eprintln!("Failed to write server.properties: {:?}", e);
+                    return Err((Status::InternalServerError, "Failed to write server.properties.".to_string()));
+                }
             }
         }
     }
-    // chmod +x startserver.sh
+
     let start_script = std::path::Path::new(&server_location).join("startserver.sh");
-    let _ = std::process::Command::new("chmod").arg("+x").arg(start_script).status();
-    // On restore: if mods.list does not exist, generate it from current mods directory
+    let status = Command::new("chmod").arg("+x").arg(start_script).status();
+    if !status.map_or(false, |s| s.success()) {
+        eprintln!("Failed to chmod startserver.sh");
+        return Err((Status::InternalServerError, "Failed to chmod startserver.sh.".to_string()));
+    }
+
     let mods_list_dst = std::path::Path::new(&server_location).join("mods.list");
     if !mods_list_dst.exists() {
         let mods_dir = std::path::Path::new(&server_location).join("mods");
@@ -266,10 +344,14 @@ async fn restore_server() -> Json<serde_json::Value> {
                 }
             }
             let mods_list_content = mod_names.join("\n");
-            let _ = fs::write(&mods_list_dst, mods_list_content).await;
+            if let Err(e) = fs::write(&mods_list_dst, mods_list_content).await {
+                eprintln!("Failed to write mods.list: {:?}", e);
+                return Err((Status::InternalServerError, "Failed to write mods.list.".to_string()));
+            }
         }
     }
-    Json(json!({"status": "Restore complete"}))
+
+    Ok(Json(json!({"status": "Restore complete"})))
 }
 
 #[get("/log_tail")]
@@ -324,43 +406,44 @@ async fn check_server_update() -> Json<serde_json::Value> {
 }
 
 #[post("/update_extras")]
-async fn update_extras() -> Status {
-    // 1. Stop the server
+async fn update_extras() -> Result<Status, (Status, String)> {
     if !systemctl_server(ServerAction::Stop) {
-        return Status::InternalServerError;
+        return Err((Status::InternalServerError, "Failed to stop server.".to_string()));
     }
-    // 2. Determine server location
+
     let server_location = std::env::var("SERVER_LOCATION").unwrap_or_else(|_| DEFAULT_SERVER_LOCATION.to_string());
     let mods_dir = std::path::Path::new(&server_location).join("mods");
     let extra_mods_dir = std::env::var("EXTRA_MODS_DIR").unwrap_or_else(|_| DEFAULT_EXTRA_MODS_DIR.to_string());
-    // 3. Read allowed mods from mods.list in the server directory
+
     let mods_list_path = std::path::Path::new(&server_location).join("mods.list");
     let allowed_mods: Vec<String> = match fs::read_to_string(&mods_list_path).await {
         Ok(contents) => contents.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         Err(e) => {
-            println!("[update_extras] Failed to read mods.list at {}: {}", mods_list_path.display(), e);
-            panic!("Failed to read mods.list: {}", e);
+            let err_msg = format!("Failed to read mods.list: {}", e);
+            eprintln!("[update_extras] {}", err_msg);
+            return Err((Status::InternalServerError, err_msg));
         }
     };
-    println!("[update_extras] Allowed mods from mods.list: {:?}", allowed_mods);
-    // 4. Delete .jar files in mods/ that are not in allowed_mods
+
     if let Ok(mut entries) = fs::read_dir(&mods_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.is_file() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.ends_with(".jar") && !allowed_mods.contains(&name.to_string()) {
-                        println!("[update_extras] Removing disallowed mod: {}", name);
-                        let _ = fs::remove_file(&path).await;
+                        if let Err(e) = fs::remove_file(&path).await {
+                            eprintln!("[update_extras] Failed to remove disallowed mod '{}': {:?}", name, e);
+                        }
                     }
                 }
             }
         }
     } else {
-        println!("[update_extras] Failed to read mods directory: {}", mods_dir.display());
-        panic!("Failed to read mods directory: {}", mods_dir.display());
+        let err_msg = format!("Failed to read mods directory: {}", mods_dir.display());
+        eprintln!("[update_extras] {}", err_msg);
+        return Err((Status::InternalServerError, err_msg));
     }
-    // 5. Copy all .jar files from extra_mods to mods
+
     if let Ok(mut entries) = fs::read_dir(&extra_mods_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
@@ -368,17 +451,20 @@ async fn update_extras() -> Status {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.ends_with(".jar") {
                         let dest = mods_dir.join(name);
-                        let _ = fs::copy(&path, &dest).await;
+                        if let Err(e) = fs::copy(&path, &dest).await {
+                            eprintln!("[update_extras] Failed to copy extra mod '{}': {:?}", name, e);
+                        }
                     }
                 }
             }
         }
     }
-    // 6. Start the server
+
     if !systemctl_server(ServerAction::Start) {
-        return Status::InternalServerError;
+        return Err((Status::InternalServerError, "Failed to start server.".to_string()));
     }
-    Status::Ok
+
+    Ok(Status::Ok)
 }
 
 #[catch(400)]
